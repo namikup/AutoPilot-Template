@@ -16,23 +16,13 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["AI Manager"])
 
-# Configuration defaults from environment variables
-SUPERVITY_API_URL = os.getenv(
-    "SUPERVITY_API_URL",
-    "https://auto-workflow-api.supervity.ai/api/v1/workflow-runs/execute/stream",
-)
-SUPERVITY_WORKFLOW_ID = os.getenv(
-    "SUPERVITY_WORKFLOW_ID", "019f7cc4-552a-7000-8d0f-d226fe29f247"
-)
-SUPERVITY_API_KEY = os.getenv("SUPERVITY_API_KEY", "")
-SUPERVITY_ACTIVE_ORG = os.getenv(
-    "SUPERVITY_ACTIVE_ORG", "LIM Jia Xian Workspace"
-)
-SUPERVITY_ACTIVE_TEAM = os.getenv("SUPERVITY_ACTIVE_TEAM", "Gang Intelligence")
-SUPERVITY_TEAM_KEY = os.getenv("SUPERVITY_TEAM_KEY", "Gang Intelligence")
-SUPERVITY_USER_TIMEZONE = os.getenv(
-    "SUPERVITY_USER_TIMEZONE", "Asia/Kuala_Lumpur"
-)
+
+def _get_clean_env(key: str, default: str = "") -> str:
+    """Retrieve environment variable and strip extraneous quotes/spaces."""
+    val = os.getenv(key, default)
+    if val:
+        return val.strip().strip('"').strip("'")
+    return default
 
 
 def parse_supervity_output(raw_text: str) -> str:
@@ -42,10 +32,52 @@ def parse_supervity_output(raw_text: str) -> str:
     if not raw_text or not raw_text.strip():
         return "Workflow executed successfully, but returned an empty response."
 
+    lines = raw_text.splitlines()
+    extracted_text_parts = []
+    is_error = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("event:"):
+            evt = stripped[6:].strip()
+            if evt in ["error", "quota-exceeded"]:
+                is_error = True
+        elif stripped.startswith("data:"):
+            content_part = stripped[5:].strip()
+            if content_part == "[DONE]":
+                continue
+            try:
+                data = json.loads(content_part)
+                if isinstance(data, dict):
+                    msg = (
+                        data.get("message")
+                        or data.get("error")
+                        or data.get("text")
+                        or data.get("content")
+                        or data.get("output")
+                        or data.get("response")
+                    )
+                    if msg:
+                        extracted_text_parts.append(str(msg))
+                    elif content_part:
+                        extracted_text_parts.append(content_part)
+                else:
+                    extracted_text_parts.append(str(data))
+            except Exception:
+                extracted_text_parts.append(content_part)
+
+    if extracted_text_parts:
+        text = "\n".join(extracted_text_parts)
+        if is_error:
+            return f"⚠️ Supervity AI Notice: {text}"
+        return text
+
     # 1. Attempt JSON parse directly
     try:
         data = json.loads(raw_text)
         if isinstance(data, dict):
+            if "error" in data and data["error"]:
+                return f"Supervity Workflow Error: {data.get('message') or data['error']}"
             for key in [
                 "output",
                 "response",
@@ -60,40 +92,6 @@ def parse_supervity_output(raw_text: str) -> str:
     except Exception:
         pass
 
-    # 2. Attempt SSE (Server-Sent Events) stream line-by-line parsing
-    lines = raw_text.splitlines()
-    extracted_text_parts = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("data:"):
-            content_part = stripped[5:].strip()
-            if content_part == "[DONE]":
-                continue
-            try:
-                data = json.loads(content_part)
-                if isinstance(data, dict):
-                    val = (
-                        data.get("text")
-                        or data.get("content")
-                        or data.get("output")
-                        or data.get("response")
-                        or content_part
-                    )
-                    extracted_text_parts.append(str(val))
-                else:
-                    extracted_text_parts.append(str(data))
-            except Exception:
-                extracted_text_parts.append(content_part)
-        elif (
-            stripped
-            and not stripped.startswith("event:")
-            and not stripped.startswith("id:")
-        ):
-            extracted_text_parts.append(stripped)
-
-    if extracted_text_parts:
-        return "\n".join(extracted_text_parts)
-
     return raw_text
 
 
@@ -105,15 +103,27 @@ async def ai_chat(
     """
     Triggers external Supervity AI workflow via API and returns response to Chat UI.
     """
+    api_url = _get_clean_env(
+        "SUPERVITY_API_URL",
+        "https://auto-workflow-api.supervity.ai/api/v1/workflow-runs/execute/stream",
+    )
+    workflow_id = _get_clean_env(
+        "SUPERVITY_WORKFLOW_ID", "019f7cc4-552a-7000-8d0f-d226fe29f247"
+    )
+    api_key = _get_clean_env("SUPERVITY_API_KEY", "")
+    active_org = _get_clean_env("SUPERVITY_ACTIVE_ORG", "")
+    active_team = _get_clean_env("SUPERVITY_ACTIVE_TEAM", "")
+    team_key = _get_clean_env("SUPERVITY_TEAM_KEY", "")
+    user_timezone = _get_clean_env("SUPERVITY_USER_TIMEZONE", "Asia/Kuala_Lumpur")
+
     user_email = (
         current_user.get("email") or payload.reporter_email or "user@example.com"
     )
 
     log.info(
-        f"AI Manager triggering workflow {SUPERVITY_WORKFLOW_ID} for user: {user_email}"
+        f"AI Manager triggering workflow {workflow_id} for user: {user_email}"
     )
 
-    api_key = os.getenv("SUPERVITY_API_KEY", SUPERVITY_API_KEY)
     if not api_key:
         log.warning(
             "SUPERVITY_API_KEY is not configured in environment variables."
@@ -123,15 +133,20 @@ async def ai_chat(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "x-source": "external",
-        "x-active-org": SUPERVITY_ACTIVE_ORG,
-        "x-active-team": SUPERVITY_ACTIVE_TEAM,
-        "x-teamKey": SUPERVITY_TEAM_KEY,
-        "x-user-timezone": SUPERVITY_USER_TIMEZONE,
+        "x-user-timezone": user_timezone,
     }
+
+    # Only include organization & team headers if configured to avoid 403 Forbidden errors
+    if active_org:
+        headers["x-active-org"] = active_org
+    if active_team:
+        headers["x-active-team"] = active_team
+    if team_key:
+        headers["x-teamKey"] = team_key
 
     # Multipart form-data fields matching Supervity API -F parameters
     form_fields = {
-        "workflowId": (None, SUPERVITY_WORKFLOW_ID),
+        "workflowId": (None, workflow_id),
         "inputs[issue_key]": (None, payload.issue_key or "ISSUE-101"),
         "inputs[ticket_description]": (None, payload.message),
         "inputs[reporter_email]": (None, user_email),
@@ -146,7 +161,7 @@ async def ai_chat(
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                SUPERVITY_API_URL,
+                api_url,
                 headers=headers,
                 files=form_fields,
             )
@@ -165,7 +180,7 @@ async def ai_chat(
             return AIChatResponse(
                 response=ai_message,
                 status="success",
-                workflow_id=SUPERVITY_WORKFLOW_ID,
+                workflow_id=workflow_id,
             )
 
     except httpx.RequestError as err:
@@ -174,3 +189,4 @@ async def ai_chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Unable to reach Supervity AI Workflow service: {str(err)}",
         )
+

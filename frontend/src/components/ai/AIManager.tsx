@@ -135,10 +135,14 @@ export function AIManager() {
         content: data.response || 'I apologize, but I encountered an issue processing your request.',
         toolCalls: data.tool_calls,
       })
-    } catch {
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error && err.message
+          ? err.message
+          : 'I apologize, but I encountered an error. Please try again.'
       addMessage({
         role: 'assistant',
-        content: 'I apologize, but I encountered an error. Please try again.',
+        content: errorMessage,
       })
     } finally {
       setIsTyping(false)
