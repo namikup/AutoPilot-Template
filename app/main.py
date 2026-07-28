@@ -37,6 +37,7 @@ from .core.storage import GCSStorage, LocalStorage, StorageBackend
 from .middleware import AuditMiddleware
 from .routers import (
     admin_router,
+    ai_router,
     audit_router,
     auth_router,
     examples_router,
@@ -44,6 +45,7 @@ from .routers import (
     items_router,
 )
 from .security import get_current_user, verify_access
+
 
 log = logging.getLogger(__name__)
 
@@ -151,8 +153,12 @@ api_router.include_router(audit_router)
 # Item CRUD operations
 api_router.include_router(items_router)
 
+# AI Manager & Supervity Workflow
+api_router.include_router(ai_router)
+
 # Authorization pattern examples
 api_router.include_router(examples_router)
+
 
 
 # =============================================================================

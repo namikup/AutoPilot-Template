@@ -28,11 +28,15 @@ from .admin import (
     UserRoleAssignRequest,
     UserRoleResponse,
 )
+from .ai import AIChatRequest, AIChatResponse
 from .audit import AuditLogListResponse, AuditLogResponse, AuditStatsResponse
 from .auth import PendingStatusResponse, UserRegistration, UserRegistrationResponse
 from .item import Item, ItemBase, ItemCreate
 
 __all__ = [
+    # AI schemas
+    "AIChatRequest",
+    "AIChatResponse",
     # Item schemas
     "ItemBase",
     "ItemCreate",
