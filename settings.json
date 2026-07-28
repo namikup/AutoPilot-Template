@@ -1,0 +1,17 @@
+{
+    "window.commandCenter": true,
+    "[dart]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.rulers": [
+            80
+        ],
+        "editor.selectionHighlight": false,
+        "editor.tabCompletion": "onlySnippets",
+        "editor.wordBasedSuggestions": "off"
+    },
+    "python.languageServer": "None",
+    "liveServer.settings.donotShowInfoMsg": true,
+    "java.import.gradle.java.home": "/opt/homebrew/Cellar/openjdk@17/17.0.16/libexec/openjdk.jdk/Contents/Home",
+    "redhat.telemetry.enabled": true
+}
