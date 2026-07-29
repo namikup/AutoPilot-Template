@@ -1,0 +1,6 @@
+Sheet,Description,Class
+Issues,"JSM all-fields issue export. Issue key, Status, Priority, Reporter, Request Type, Organizations, customfield_10030 (Time to resolution) = SLA, customfield_10101 (Assignment group)",transactional
+Users_Directory,Reporter directory. x_vip drives prioritization,master
+Assets_Access,JSM Assets/Insight access objects. status Active/Pending/Revoked,master
+Knowledge_Base,KB articles. x_auto_safe = safe to auto-remediate,master
+SEEDED TRAP TYPES,stalled provisioning ticket · recurring known-error across users · mis-routed ticket · VIP near SLA breach,note

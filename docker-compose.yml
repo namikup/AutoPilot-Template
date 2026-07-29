@@ -30,6 +30,8 @@ services:
       - ./utils:/app/utils
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
+      - ./scripts:/app/scripts
+      - ./data:/app/data
       - document_storage:/app/document_storage
     ports:
       - "127.0.0.1:8001:8000"
@@ -73,9 +75,27 @@ services:
       retries: 3
       start_period: 30s
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin_servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   document_storage:
+  pgadmin_data:
 
 networks:
   app-network:

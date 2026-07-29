@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "AutoPilot Database",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "app_db",
+      "Username": "user",
+      "SSLMode": "prefer"
+    }
+  }
+}

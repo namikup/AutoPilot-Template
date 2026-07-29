@@ -98,6 +98,7 @@ autopilot-template-frontend-1     running
 | 🖥️ **Dashboard** | [http://localhost:3001](http://localhost:3001) | Your Command Center UI |
 | ⚙️ **API Docs** | [http://localhost:8001/api/docs](http://localhost:8001/api/docs) | Backend Swagger documentation |
 | 🗄️ **Database** | `localhost:5432` | PostgreSQL (user: `user`, password: `password`) |
+| 🐘 **pgAdmin** | [http://localhost:5050](http://localhost:5050) | Database GUI (email: `admin@admin.com`, password: `admin`) |
 
 **You should see the Command Center dashboard with:**
 - Stat cards showing AI activity metrics
