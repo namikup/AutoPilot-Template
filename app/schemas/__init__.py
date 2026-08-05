@@ -32,6 +32,7 @@ from .ai import AIChatRequest, AIChatResponse
 from .audit import AuditLogListResponse, AuditLogResponse, AuditStatsResponse
 from .auth import PendingStatusResponse, UserRegistration, UserRegistrationResponse
 from .item import Item, ItemBase, ItemCreate
+from .policy import PolicyBase, PolicyCreate, PolicyEvaluationOut, PolicyOut, PolicyUpdate
 
 __all__ = [
     # AI schemas
@@ -41,6 +42,12 @@ __all__ = [
     "ItemBase",
     "ItemCreate",
     "Item",
+    # Policy schemas
+    "PolicyBase",
+    "PolicyCreate",
+    "PolicyUpdate",
+    "PolicyOut",
+    "PolicyEvaluationOut",
     # Auth schemas
     "UserRegistration",
     "UserRegistrationResponse",

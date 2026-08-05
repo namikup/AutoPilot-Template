@@ -1,5 +1,5 @@
 # Makefile — AutoPilot Template
-.PHONY: help up down logs-be logs-fe reset-db migrate-create migrate-up migrate-down migrate-history format lint test-be
+.PHONY: help up down logs-be logs-fe reset-db seed-policies migrate-create migrate-up migrate-down migrate-history format lint test-be
 
 help:
 	@echo "╔════════════════════════════════════════════════════════════════════╗"
@@ -12,6 +12,7 @@ help:
 	@echo "  logs-be     : View real-time logs for the backend."
 	@echo "  logs-fe     : View real-time logs for the frontend."
 	@echo "  reset-db    : Clean and re-initialize the database with sample data."
+	@echo "  seed-policies : Upsert the default AI governance policies (safe to re-run)."
 	@echo "  format      : Automatically format all backend and frontend code."
 	@echo "  lint        : Lint all backend and frontend code for issues."
 	@echo "  test-be     : Run backend tests with pytest."
@@ -44,6 +45,11 @@ reset-db:
 	@echo "🌱 Seeding database with initial data..."
 	docker-compose exec backend python scripts/seed_db.py
 	@echo "✅ Database reset complete!"
+
+seed-policies:
+	@echo "🌱 Seeding default AI policies..."
+	docker-compose exec backend python scripts/seed_policies.py
+	@echo "✅ Policy seed complete!"
 
 migrate-create:
 	@if [ -z "$(MSG)" ]; then \
