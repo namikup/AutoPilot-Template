@@ -29,3 +29,11 @@ KB-126,Known issue 26,Documented,Standard fix,true
 KB-127,Known issue 27,Documented,Standard fix,false
 KB-128,Known issue 28,Documented,Standard fix,false
 KB-129,Known issue 29,Documented,Standard fix,true
+KB-130,Payroll portal outage,Payroll portal backend node pool crashed under load,Restart node pool / failover to standby,false
+KB-131,SSO loop on analytics dashboard,Stale token cache after token-service restart,"Clear token cache, re-issue assertion",true
+KB-132,VPN driver rollback needs change approval,NIC driver rollback touches production image,"Raise change request, apply after CAB",false
+KB-133,Duplicate ticket auto-merge,Same requester submits twice within minutes,Merge duplicate into original,true
+KB-134,Timesheet submission failing,Payroll portal dependency down,Use offline timesheet form until restored,true
+KB-135,Known issue 35,Documented,Standard fix,false
+KB-136,Known issue 36,Documented,Standard fix,true
+KB-137,Known issue 37,Documented,Standard fix,true

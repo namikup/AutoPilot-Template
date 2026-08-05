@@ -2,8 +2,8 @@
 """
 scripts/seed_hackathon_data.py
 ==============================
-Reads the 5 official hackathon CSVs from /app/data/ and inserts all rows
-into the corresponding PostgreSQL tables.
+Reads the 11 official hackathon CSVs from /app/data/ and inserts all rows
+into the corresponding PostgreSQL tables (Round 2 Enterprise Export).
 
 Also seeds workbench_items with:
   - ITSM-2013 (David Ng, VIP) flagged as pending_approval  ← primary demo item
@@ -32,7 +32,19 @@ DATA_DIR = BASE_DIR / "data"
 
 sys.path.insert(0, str(BASE_DIR))
 
-from app.models.hackathon import AssetAccess, FieldDictionary, Issue, KnowledgeBase, UserDirectory
+from app.models.hackathon import (
+    AssetAccess,
+    ChangeRequest,
+    CSATSurvey,
+    FieldDictionary,
+    IncidentProblemLink,
+    Issue,
+    KnowledgeBase,
+    SLACalendar,
+    TeamRoster,
+    TicketComment,
+    UserDirectory,
+)
 from app.models.workbench import WorkbenchItem
 
 # ---------------------------------------------------------------------------
@@ -53,6 +65,20 @@ Session = sessionmaker(bind=engine)
 
 def parse_bool(val: str) -> bool:
     return str(val).strip().lower() in ("true", "1", "yes")
+
+
+def parse_float(val: str) -> float | None:
+    try:
+        return float(val.strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_int(val: str) -> int | None:
+    try:
+        return int(val.strip())
+    except (ValueError, TypeError):
+        return None
 
 
 def read_csv(filename: str) -> list[dict]:
@@ -80,9 +106,14 @@ def truncate_tables(session, table_names: list[str]):
 def seed_issues(session) -> int:
     rows = read_csv("Issues.csv")
     objects = []
+    seen_keys = set()
     for r in rows:
+        key = r.get("Issue key", "").strip()
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
         objects.append(Issue(
-            issue_key=r.get("Issue key", "").strip(),
+            issue_key=key,
             issue_id=r.get("Issue id", "").strip() or None,
             issue_type=r.get("Issue Type", "").strip() or None,
             summary=r.get("Summary", "").strip(),
@@ -102,6 +133,12 @@ def seed_issues(session) -> int:
             organizations=r.get("Organizations", "").strip() or None,
             time_to_resolution=r.get("customfield_10030 (Time to resolution)", "").strip() or None,
             assignment_group=r.get("customfield_10101 (Assignment group)", "").strip() or None,
+            x_channel=r.get("x_channel", "").strip() or None,
+            x_escalation_risk=r.get("x_escalation_risk", "").strip() or None,
+            x_reopened=parse_bool(r.get("x_reopened", "false")),
+            first_response_time=r.get("first_response_time", "").strip() or None,
+            linked_incident=r.get("linked_incident", "").strip() or None,
+            x_confidence=parse_float(r.get("x_confidence", "")),
         ))
     session.bulk_save_objects(objects)
     session.commit()
@@ -178,20 +215,123 @@ def seed_field_dictionary(session) -> int:
     return len(objects)
 
 
+def seed_ticket_comments(session) -> int:
+    rows = read_csv("Ticket_Comments.csv")
+    objects = []
+    for r in rows:
+        comment_id = r.get("comment_id", "").strip()
+        if not comment_id:
+            continue
+        objects.append(TicketComment(
+            comment_id=comment_id,
+            issue_key=r.get("issue_key", "").strip(),
+            author=r.get("author", "").strip() or None,
+            created=r.get("created", "").strip() or None,
+            body=r.get("body", "").strip() or None,
+            is_internal=parse_bool(r.get("is_internal", "false")),
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
+def seed_csat_surveys(session) -> int:
+    rows = read_csv("CSAT_Surveys.csv")
+    objects = []
+    for r in rows:
+        survey_id = r.get("survey_id", "").strip()
+        if not survey_id:
+            continue
+        objects.append(CSATSurvey(
+            survey_id=survey_id,
+            issue_key=r.get("issue_key", "").strip(),
+            score=parse_int(r.get("score", "")),
+            comment=r.get("comment", "").strip() or None,
+            submitted_at=r.get("submitted_at", "").strip() or None,
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
+def seed_change_requests(session) -> int:
+    rows = read_csv("Change_Requests.csv")
+    objects = []
+    for r in rows:
+        change_id = r.get("change_id", "").strip()
+        if not change_id:
+            continue
+        objects.append(ChangeRequest(
+            change_id=change_id,
+            issue_key=r.get("issue_key", "").strip(),
+            risk=r.get("risk", "").strip() or None,
+            status=r.get("status", "").strip() or None,
+            cab_approval_required=parse_bool(r.get("cab_approval_required", "true")),
+            approver=r.get("approver", "").strip() or None,
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
+def seed_incident_problem_links(session) -> int:
+    rows = read_csv("Incident_Problem_Links.csv")
+    objects = []
+    for r in rows:
+        link_id = r.get("link_id", "").strip()
+        if not link_id:
+            continue
+        objects.append(IncidentProblemLink(
+            link_id=link_id,
+            child_issue_key=r.get("child_issue_key", "").strip(),
+            parent_incident_key=r.get("parent_incident_key", "").strip(),
+            relationship=r.get("relationship", "").strip() or None,
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
+def seed_sla_calendar(session) -> int:
+    rows = read_csv("SLA_Calendar.csv")
+    objects = []
+    for r in rows:
+        region = r.get("region", "").strip()
+        if not region:
+            continue
+        objects.append(SLACalendar(
+            region=region,
+            business_hours=r.get("business_hours", "").strip() or None,
+            timezone=r.get("timezone", "").strip() or None,
+            holiday_dates=r.get("holiday_dates", "").strip() or None,
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
+def seed_team_roster(session) -> int:
+    rows = read_csv("Team_Roster.csv")
+    objects = []
+    for r in rows:
+        team = r.get("team", "").strip()
+        member = r.get("member", "").strip()
+        if not team or not member:
+            continue
+        objects.append(TeamRoster(
+            team=team,
+            member=member,
+            role=r.get("role", "").strip() or None,
+            on_call=parse_bool(r.get("on_call", "false")),
+            assignment_group=r.get("assignment_group", "").strip() or None,
+            region=r.get("region", "").strip() or None,
+        ))
+    session.bulk_save_objects(objects)
+    session.commit()
+    return len(objects)
+
+
 def seed_workbench_items(session) -> int:
-    """
-    Seed the HITL exception queue.
-
-    ITSM-2013 — David Ng (VIP Executive)
-      Issue: Cannot access board reporting dashboard (login loop)
-      KB match: KB-103 — SSO loop on dashboard login / stale token cache
-      Action: Clear token cache, re-issue SAML assertion
-      Status: pending_approval  ← primary demo item for workbench
-
-    ITSM-2014 — Uma Das
-      Issue: Laptop running slow — Highest priority, At risk SLA
-      Status: pending_approval  ← secondary demo item
-    """
     items = [
         WorkbenchItem(
             ticket_key="ITSM-2013",
@@ -245,12 +385,18 @@ def seed_workbench_items(session) -> int:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("🌱  Starting hackathon data seed...\n")
+    print("🌱  Starting hackathon Round 2 data seed...\n")
 
     with Session() as session:
         # Clear all target tables first (idempotent re-run)
         truncate_tables(session, [
             "workbench_items",
+            "team_roster",
+            "sla_calendar",
+            "incident_problem_links",
+            "change_requests",
+            "csat_surveys",
+            "ticket_comments",
             "field_dictionary",
             "knowledge_base",
             "assets_access",
@@ -259,24 +405,42 @@ def main():
         ])
 
         n = seed_issues(session)
-        print(f"✅  issues             → {n} rows")
+        print(f"✅  issues                 → {n} rows")
 
         n = seed_users_directory(session)
-        print(f"✅  users_directory    → {n} rows")
+        print(f"✅  users_directory        → {n} rows")
 
         n = seed_assets_access(session)
-        print(f"✅  assets_access      → {n} rows")
+        print(f"✅  assets_access          → {n} rows")
 
         n = seed_knowledge_base(session)
-        print(f"✅  knowledge_base     → {n} rows")
+        print(f"✅  knowledge_base         → {n} rows")
 
         n = seed_field_dictionary(session)
-        print(f"✅  field_dictionary   → {n} rows")
+        print(f"✅  field_dictionary       → {n} rows")
+
+        n = seed_ticket_comments(session)
+        print(f"✅  ticket_comments        → {n} rows")
+
+        n = seed_csat_surveys(session)
+        print(f"✅  csat_surveys           → {n} rows")
+
+        n = seed_change_requests(session)
+        print(f"✅  change_requests        → {n} rows")
+
+        n = seed_incident_problem_links(session)
+        print(f"✅  incident_problem_links → {n} rows")
+
+        n = seed_sla_calendar(session)
+        print(f"✅  sla_calendar           → {n} rows")
+
+        n = seed_team_roster(session)
+        print(f"✅  team_roster            → {n} rows")
 
         n = seed_workbench_items(session)
-        print(f"✅  workbench_items    → {n} rows (ITSM-2013 pending_approval)")
+        print(f"✅  workbench_items        → {n} rows (ITSM-2013 pending_approval)")
 
-    print("\n🎉  Seed complete! ITSM-2013 is ready in the Workbench queue.")
+    print("\n🎉  Seed complete! All Round 2 datasets ingested successfully.")
 
 
 if __name__ == "__main__":
