@@ -247,7 +247,7 @@ def test_sla_escalates_on_missing_remaining_pct():
     req = {"priority": "Medium"}
     verdict, reason = sla_vip_escalation(req, SLA_PARAMS)
     assert verdict == "ESCALATE"
-    assert "remaining" in reason.lower()
+    assert reason == "SLA remaining unknown; cannot assess breach risk"
 
 
 def test_sla_never_crashes_on_empty_input():
@@ -296,6 +296,15 @@ def test_stall_escalates_on_unknown_priority():
     verdict, reason = stall_detection(req, STALL_PARAMS)
     assert verdict == "ESCALATE"
     assert "threshold" in reason.lower()
+
+
+def test_stall_escalates_on_missing_inactive_hours():
+    # Priority is known (threshold resolves fine) but inactive_hours itself is
+    # absent — must escalate on that specific guard, not the priority lookup.
+    req = {"priority": "Medium"}
+    verdict, reason = stall_detection(req, STALL_PARAMS)
+    assert verdict == "ESCALATE"
+    assert reason == "Last update time unknown; cannot assess stall"
 
 
 def test_stall_never_crashes_on_empty_input():

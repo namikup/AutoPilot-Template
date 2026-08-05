@@ -45,6 +45,13 @@ def _is_empty(value) -> bool:
     return False
 
 
+def _round(value):
+    """Round floats to 2 decimal places for display; leave other types untouched."""
+    if isinstance(value, float):
+        return round(value, 2)
+    return value
+
+
 # =============================================================================
 # 1. DATA_COMPLETENESS
 # =============================================================================
@@ -107,7 +114,7 @@ def auto_remediation_safety(req: dict, params: dict) -> tuple[str, str]:
     if min_confidence is None:
         return "ESCALATE", "Minimum confidence threshold is not configured; cannot assess risk"
     if confidence < min_confidence:
-        return "ESCALATE", f"Confidence {confidence} below threshold {min_confidence}"
+        return "ESCALATE", f"Confidence {_round(confidence)} below threshold {_round(min_confidence)}"
 
     blocked_components = params.get("blocked_components") or []
     component = req.get("component")
@@ -142,21 +149,21 @@ def sla_vip_escalation(req: dict, params: dict) -> tuple[str, str]:
     threshold_pct = params.get("escalate_below_remaining_pct")
 
     if remaining_pct is None:
-        return "ESCALATE", "SLA remaining percentage is missing; cannot assess urgency"
+        return "ESCALATE", "SLA remaining unknown; cannot assess breach risk"
     if threshold_pct is None:
         return "ESCALATE", "SLA escalation threshold is not configured; cannot assess urgency"
 
     if remaining_pct < threshold_pct:
-        target_desc = f"{target_hours}h" if target_hours is not None else "an unknown"
+        target_desc = f"{_round(target_hours)}h" if target_hours is not None else "an unknown"
         return "ESCALATE", (
-            f"SLA remaining is {remaining_pct}%, below the {threshold_pct}% escalation threshold "
+            f"SLA remaining is {_round(remaining_pct)}%, below the {_round(threshold_pct)}% escalation threshold "
             f"(priority {priority!r}, target {target_desc})"
         )
 
     if req.get("sla_status") == "Breached" and params.get("breached_goes_straight_to_lead"):
         return "ESCALATE", "SLA already breached; routing to team lead"
 
-    return "ALLOW", f"SLA on track — {remaining_pct}% of the target window remaining"
+    return "ALLOW", f"SLA on track — {_round(remaining_pct)}% of the target window remaining"
 
 
 # =============================================================================
@@ -180,14 +187,15 @@ def stall_detection(req: dict, params: dict) -> tuple[str, str]:
 
     inactive_hours = req.get("inactive_hours")
     if inactive_hours is None:
-        return "ESCALATE", "Inactive hours is missing; cannot assess whether the ticket has stalled"
+        return "ESCALATE", "Last update time unknown; cannot assess stall"
 
     if inactive_hours > threshold:
         return "ESCALATE", (
-            f"No update for {inactive_hours}h, exceeds the {threshold}h threshold for {priority} priority"
+            f"No update for {_round(inactive_hours)}h, exceeds the {_round(threshold)}h threshold "
+            f"for {priority} priority"
         )
 
-    return "ALLOW", f"Ticket active — {inactive_hours}h inactive is within the {threshold}h threshold"
+    return "ALLOW", f"Ticket active — {_round(inactive_hours)}h inactive is within the {_round(threshold)}h threshold"
 
 
 # =============================================================================

@@ -1,6 +1,7 @@
 # app/models/__init__.py
 from .audit import AuditCategory, AuditLog, AuditSeverity
 from .hackathon import AssetAccess, FieldDictionary, Issue, KnowledgeBase, UserDirectory
+from .insight import Insight
 from .item import Item
 from .policy import Policy, PolicyEvaluation
 from .settings import Settings
@@ -23,4 +24,6 @@ __all__ = [
     # AI Policies
     "Policy",
     "PolicyEvaluation",
+    # AI Insights
+    "Insight",
 ]

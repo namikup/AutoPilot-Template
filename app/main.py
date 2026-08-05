@@ -16,6 +16,9 @@ All endpoint logic has been organized into routers:
 - routers/items.py - Item CRUD operations
 - routers/audit.py - Audit log viewing & export
 - routers/examples.py - Authorization pattern examples
+- routers/workbench.py - HITL exception queue
+- routers/policies.py - AI policy governance & evaluation
+- routers/insights.py - AI insights: compute, list, act, dismiss
 
 AUDIT SYSTEM:
 - Every API request is automatically logged via AuditMiddleware
@@ -42,7 +45,9 @@ from .routers import (
     auth_router,
     examples_router,
     health_router,
+    insights_router,
     items_router,
+    policies_router,
     workbench_router,
 )
 from .security import get_current_user, verify_access
@@ -159,6 +164,12 @@ api_router.include_router(ai_router)
 
 # Workbench — Human-in-the-Loop exception queue
 api_router.include_router(workbench_router)
+
+# AI Policies — governance rules & evaluation audit trail
+api_router.include_router(policies_router)
+
+# AI Insights — visibility layer & suggested actions
+api_router.include_router(insights_router)
 
 # Authorization pattern examples
 api_router.include_router(examples_router)
