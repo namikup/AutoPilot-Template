@@ -159,7 +159,7 @@ async def ai_chat(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(
                 api_url,
                 headers=headers,
