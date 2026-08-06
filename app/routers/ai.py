@@ -104,10 +104,107 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
     Uses correct field names from the SQLAlchemy models.
     """
     msg_lower = message.lower()
+    from sqlalchemy import or_, and_
 
-    # ── Open / pending tickets ───────────────────────────────────────────────
-    if any(k in msg_lower for k in ["open ticket", "pending ticket", "active ticket",
-                                     "unresolved", "open issue"]):
+    # ── Ticket lookup by explicit ID (e.g. ITSM-2008) ────────────────────────
+    ticket_match = re.search(r'\b(ITSM|ISSUE|INC|CHG|REQ)[-\s]?(\d+)\b', message, re.IGNORECASE)
+    if ticket_match:
+        ticket_key = f"{ticket_match.group(1).upper()}-{ticket_match.group(2)}"
+        issue = db.query(Issue).filter(Issue.issue_key == ticket_key).first()
+        if issue:
+            return (
+                f"🎫 **{issue.issue_key}** — {issue.summary}\n\n"
+                f"- **Status:** {issue.status}\n"
+                f"- **Priority:** {issue.priority}\n"
+                f"- **Reporter:** {issue.reporter or 'Unknown'}\n"
+                f"- **Type:** {issue.issue_type or 'N/A'}\n"
+                f"- **Created:** {issue.created or 'N/A'}\n"
+                f"- **Description:** {(issue.description or '')[:200]}..."
+            )
+        return f"No ticket found with ID **{ticket_key}**."
+
+    # ── Reporter / User specific tickets (e.g. "tickets for Chloe Fernandez") ──
+    reporter_match = re.search(r'(?:tickets?\s+(?:for|reported\s+by|by|of)|issues?\s+for)\s+([a-zA-Z\s]+)', msg_lower)
+    if reporter_match:
+        name_query = reporter_match.group(1).strip()
+        user_issues = (
+            db.query(Issue)
+            .filter(Issue.reporter.ilike(f"%{name_query}%"))
+            .order_by(Issue.ingested_at.desc())
+            .limit(5)
+            .all()
+        )
+        if user_issues:
+            lines = [f"👤 **{len(user_issues)} tickets for '{name_query.title()}':**\n"]
+            for t in user_issues:
+                lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.status}*")
+            return "\n".join(lines)
+        return f"No tickets found for reporter **{name_query.title()}**."
+
+    # ── Priority filtered tickets (e.g. "high priority open tickets") ──────────
+    if any(p in msg_lower for p in ["high priority", "highest priority", "urgent", "critical", "low priority", "medium priority"]):
+        priorities = []
+        if any(p in msg_lower for p in ["high", "highest", "urgent", "critical"]):
+            priorities = ["High", "Highest"]
+        elif "medium" in msg_lower:
+            priorities = ["Medium"]
+        elif "low" in msg_lower:
+            priorities = ["Low"]
+
+        filtered_issues = (
+            db.query(Issue)
+            .filter(Issue.status.in_(["Open", "In Progress", "Pending"]))
+            .filter(Issue.priority.in_(priorities))
+            .order_by(Issue.ingested_at.desc())
+            .limit(5)
+            .all()
+        )
+        if filtered_issues:
+            lines = [f"🔥 **{len(filtered_issues)} {'/'.join(priorities)} priority open tickets:**\n"]
+            for t in filtered_issues:
+                lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.status}*")
+            return "\n".join(lines)
+        return f"✅ No open tickets found matching priority **{'/'.join(priorities)}**."
+
+    # ── Status-specific ticket queries (e.g. "tickets in progress", "resolved tickets") ──
+    if "in progress" in msg_lower or "in-progress" in msg_lower:
+        ip_issues = (
+            db.query(Issue)
+            .filter(Issue.status == "In Progress")
+            .order_by(Issue.ingested_at.desc())
+            .limit(5)
+            .all()
+        )
+        if ip_issues:
+            lines = [f"⚙️ **{len(ip_issues)} tickets currently In Progress:**\n"]
+            for t in ip_issues:
+                lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.reporter or 'Unknown'}*")
+            return "\n".join(lines)
+        return "✅ No tickets currently In Progress."
+
+    if ("resolved" in msg_lower and "unresolved" not in msg_lower) or "closed" in msg_lower:
+        res_issues = (
+            db.query(Issue)
+            .filter(Issue.status.in_(["Resolved", "Closed"]))
+            .order_by(Issue.ingested_at.desc())
+            .limit(5)
+            .all()
+        )
+        if res_issues:
+            lines = [f"✅ **{len(res_issues)} recently resolved/closed tickets:**\n"]
+            for t in res_issues:
+                lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary}")
+            return "\n".join(lines)
+        return "No resolved tickets found."
+
+    # ── Open / active / pending tickets general ───────────────────────────────
+    if any(k in msg_lower for k in [
+        "open ticket", "open tickets", "pending ticket", "pending tickets",
+        "active ticket", "active tickets", "active issue", "active issues",
+        "unresolved", "open issue", "open issues", "show tickets", "list tickets",
+        "list pending", "all pending", "active right now", "any active",
+        "current tickets", "current issues", "any issues"
+    ]):
         open_issues = (
             db.query(Issue)
             .filter(Issue.status.in_(["Open", "In Progress", "Pending"]))
@@ -164,30 +261,44 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
             lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.reporter}*")
         return "\n".join(lines)
 
-    # ── Ticket lookup by ID ──────────────────────────────────────────────────
-    ticket_match = re.search(r'\b(ITSM|ISSUE|INC|CHG|REQ)[-\s]?(\d+)\b', message, re.IGNORECASE)
-    if ticket_match:
-        ticket_key = f"{ticket_match.group(1).upper()}-{ticket_match.group(2)}"
-        issue = db.query(Issue).filter(Issue.issue_key == ticket_key).first()
-        if issue:
-            return (
-                f"🎫 **{issue.issue_key}** — {issue.summary}\n\n"
-                f"- **Status:** {issue.status}\n"
-                f"- **Priority:** {issue.priority}\n"
-                f"- **Reporter:** {issue.reporter or 'Unknown'}\n"
-                f"- **Type:** {issue.issue_type or 'N/A'}\n"
-                f"- **Created:** {issue.created or 'N/A'}\n"
-                f"- **Description:** {(issue.description or '')[:200]}..."
-            )
-        return f"No ticket found with ID **{ticket_key}**."
+    # ── CSAT & Feedback / Reviews ─────────────────────────────────────────────
+    if any(k in msg_lower for k in ["csat", "satisfaction", "rating", "score", "feedback", "review", "reviews"]):
+        surveys = db.query(CSATSurvey).all()
+        if not surveys:
+            return "No CSAT survey data available yet."
+        scores = [s.score for s in surveys if s.score is not None]
+        avg = sum(scores) / len(scores) if scores else 0
+        pos = sum(1 for s in scores if s >= 4)
+        neg = sum(1 for s in scores if s < 3)
+
+        if "negative" in msg_lower or "bad" in msg_lower or "poor" in msg_lower:
+            neg_surveys = [s for s in surveys if s.score is not None and s.score < 3]
+            lines = [f"👎 **CSAT Negative Reviews** ({len(neg_surveys)} total <3/5 rating):\n"]
+            for s in neg_surveys[:3]:
+                lines.append(f"- **{s.issue_key}** (Score: {s.score}/5): _{s.comment or 'No comment'}_")
+            return "\n".join(lines)
+
+        return (
+            f"⭐ **CSAT Summary** ({len(surveys)} responses):\n\n"
+            f"- Average Score: **{avg:.1f}/5**\n"
+            f"- Total Responses: **{len(surveys)}**\n"
+            f"- Positive (≥4): **{pos}**\n"
+            f"- Negative (<3): **{neg}**"
+        )
 
     # ── Knowledge base search ─────────────────────────────────────────────────
-    if any(k in msg_lower for k in ["knowledge", "kb", "article", "how to", "guide",
+    if any(k in msg_lower for k in ["knowledge", "kb", "article", "articles", "how to", "guide",
                                      "solution", "fix", "resolve", "workaround"]):
-        keywords = [w for w in msg_lower.split() if len(w) > 3
-                    and w not in {"help", "with", "that", "this", "know", "find", "articles"}]
+        # Extract clean words using regex
+        raw_words = re.findall(r'\b[a-zA-Z0-9]+\b', msg_lower)
+        stopwords = {
+            "help", "with", "that", "this", "know", "find", "articles", "article",
+            "show", "tell", "about", "how", "to", "fix", "resolve", "search", "list",
+            "what", "is", "the", "for", "and", "can", "you", "me", "base", "knowledge", "kb"
+        }
+        keywords = [w for w in raw_words if len(w) >= 2 and w not in stopwords]
+
         if keywords:
-            from sqlalchemy import or_
             conditions = []
             for kw in keywords[:3]:
                 conditions += [
@@ -195,29 +306,27 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
                     KnowledgeBase.root_cause.ilike(f"%{kw}%"),
                     KnowledgeBase.workaround.ilike(f"%{kw}%"),
                 ]
-            query = db.query(KnowledgeBase).filter(or_(*conditions))
-        else:
-            query = db.query(KnowledgeBase)
-        articles = query.limit(5).all()
-        if articles:
-            lines = [f"📚 **Found {len(articles)} knowledge base article(s):**\n"]
-            for a in articles:
-                lines.append(f"- **{a.article_id}** {a.title}")
-                if a.workaround:
-                    lines.append(f"  _Workaround: {a.workaround[:150]}..._")
-            return "\n".join(lines)
-        # No keyword match — show all available articles instead
-        all_articles = db.query(KnowledgeBase).limit(10).all()
+            articles = db.query(KnowledgeBase).filter(or_(*conditions)).limit(5).all()
+            if articles:
+                lines = [f"📚 **Found {len(articles)} knowledge base article(s):**\n"]
+                for a in articles:
+                    lines.append(f"- **{a.article_id}** {a.title}")
+                    if a.workaround:
+                        lines.append(f"  _Workaround: {a.workaround[:150]}..._")
+                return "\n".join(lines)
+
+        # General KB list or fallback when specific topic not found
+        all_articles = db.query(KnowledgeBase).limit(5).all()
         if all_articles:
-            lines = ["No articles matched that query. Here's what's available in the KB:\n"]
+            prefix = "📚 **Knowledge Base Articles:**\n" if not keywords else f"No specific KB article matched **'{' '.join(keywords)}'**. Here are available guides:\n"
+            lines = [prefix]
             for a in all_articles:
                 lines.append(f"- **{a.article_id}** {a.title}")
             return "\n".join(lines)
         return "The knowledge base is currently empty."
 
     # ── Workbench / pending approvals ────────────────────────────────────────
-    if any(k in msg_lower for k in ["workbench", "approval", "approve", "pending approval",
-                                     "queue", "review"]):
+    if any(k in msg_lower for k in ["workbench", "pending approval", "approval queue", "items to approve", "approval"]):
         pending = (
             db.query(WorkbenchItem)
             .filter(WorkbenchItem.status == "pending_approval")
@@ -228,21 +337,6 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
         return (
             f"🔔 You have **{pending} item(s)** pending approval in your Workbench.\n\n"
             f"Visit [Workbench](/workbench) to review and approve or reject them."
-        )
-
-    # ── CSAT summary ─────────────────────────────────────────────────────────
-    if any(k in msg_lower for k in ["csat", "satisfaction", "rating", "score", "feedback"]):
-        surveys = db.query(CSATSurvey).all()
-        if not surveys:
-            return "No CSAT survey data available yet."
-        scores = [s.score for s in surveys if s.score is not None]
-        avg = sum(scores) / len(scores) if scores else 0
-        return (
-            f"⭐ **CSAT Summary** ({len(surveys)} responses):\n\n"
-            f"- Average Score: **{avg:.1f}/5**\n"
-            f"- Total Responses: **{len(surveys)}**\n"
-            f"- Positive (≥4): **{sum(1 for s in scores if s >= 4)}**\n"
-            f"- Negative (<3): **{sum(1 for s in scores if s < 3)}**"
         )
 
     # ── Stats / summary ──────────────────────────────────────────────────────
@@ -276,10 +370,13 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
     return (
         "👋 Hi! I'm your **AutoPilot AI Assistant**. I can help you with:\n\n"
         "- 📋 **View open/pending tickets** — *\"Show me open tickets\"*\n"
+        "- 🔥 **Priority tickets** — *\"High priority open tickets\"*\n"
+        "- 👤 **User tickets** — *\"Tickets for Chloe Fernandez\"*\n"
         "- 🚨 **SLA alerts** — *\"Any SLA breaches?\"*\n"
         "- 👑 **VIP issues** — *\"Show VIP user tickets\"*\n"
         "- 🎫 **Ticket lookup** — *\"Tell me about ITSM-2013\"*\n"
-        "- 📚 **Knowledge base** — *\"How to resolve login issues?\"*\n"
+        "- 📚 **Knowledge base** — *\"How to fix VPN drops?\"*\n"
+        "- ⭐ **CSAT & Reviews** — *\"Any negative reviews?\"*\n"
         "- 📊 **Dashboard summary** — *\"Give me a summary\"*\n"
         "- 🔔 **Workbench queue** — *\"Any pending approvals?\"*\n\n"
         "What would you like to know?"
