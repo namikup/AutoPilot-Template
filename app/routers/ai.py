@@ -441,10 +441,13 @@ async def ai_chat(
         }
 
         try:
-            # Short timeout: if Supervity has a Human Approval node it will hang.
-            # We catch that and fall through to local response.
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(api_url, headers=headers, files=form_fields)
+            # Enforce strict 5.0s wall-clock timeout so streaming pings do not reset read timeout
+            import asyncio
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+                response = await asyncio.wait_for(
+                    client.post(api_url, headers=headers, files=form_fields),
+                    timeout=5.0,
+                )
                 if response.status_code == 200:
                     ai_message = parse_supervity_output(response.text)
                     if ai_message and "empty" not in ai_message.lower():
@@ -456,8 +459,8 @@ async def ai_chat(
                         )
                 else:
                     log.warning(f"Supervity HTTP {response.status_code} — falling back to local.")
-        except httpx.TimeoutException:
-            log.warning("Supervity workflow timed out — using local AI response.")
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            log.warning("Supervity workflow timed out (5s wall clock limit) — using local AI response.")
         except httpx.RequestError as err:
             log.warning(f"Supervity unreachable ({err}) — using local AI response.")
 
