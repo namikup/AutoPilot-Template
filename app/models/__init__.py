@@ -13,7 +13,9 @@ from .hackathon import (
     TicketComment,
     UserDirectory,
 )
+from .insight import Insight
 from .item import Item
+from .policy import Policy, PolicyEvaluation
 from .settings import Settings
 from .workbench import WorkbenchItem
 
@@ -37,4 +39,9 @@ __all__ = [
     "TeamRoster",
     # Workbench HITL
     "WorkbenchItem",
+    # AI Policies
+    "Policy",
+    "PolicyEvaluation",
+    # AI Insights
+    "Insight",
 ]
