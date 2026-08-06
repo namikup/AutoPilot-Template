@@ -127,7 +127,7 @@ export function AIManager() {
           content: m.content,
         })),
         context: { page: currentPageContext },
-      })
+      }, undefined, 40000) // 40s browser-side timeout
 
       // Remove loading message and add real response
       addMessage({

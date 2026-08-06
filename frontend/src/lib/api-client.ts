@@ -9,7 +9,11 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || ''
  *                 The endpoint should include the '/api' prefix.
  * @param options Standard fetch options (method, body, etc.).
  */
-async function apiClientFetch<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function apiClientFetch<T = unknown>(
+  endpoint: string,
+  options: RequestInit = {},
+  timeoutMs?: number,
+): Promise<T> {
   const session = await getSession()
 
   const headers = new Headers(options.headers || {})
@@ -18,29 +22,50 @@ async function apiClientFetch<T = unknown>(endpoint: string, options: RequestIni
     headers.set('Authorization', `Bearer ${session.accessToken}`)
   }
 
-  // Construct the full URL: http://localhost:8001/app1/api/test
+  // Construct the full URL
   const fullUrl = `${API_URL}${BASE_PATH}${endpoint}`
 
-  const response = await fetch(fullUrl, { ...options, headers })
-
-  // If the backend returns a 401, log it but don't force redirect in dev mode
-  if (response.status === 401) {
-    console.warn('[API] 401 Unauthorized — check backend AUTH_BYPASS setting')
+  // Set up optional AbortController timeout so browser never hangs indefinitely
+  let controller: AbortController | undefined
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  if (timeoutMs) {
+    controller = new AbortController()
+    timeoutId = setTimeout(() => controller!.abort(), timeoutMs)
   }
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({
-      detail: response.statusText,
-    }))
-    throw new Error(errorData.detail || 'An API error occurred.')
-  }
+  try {
+    const response = await fetch(fullUrl, {
+      ...options,
+      headers,
+      signal: controller?.signal,
+    })
 
-  // Handle responses with no content
-  if (response.status === 204) {
-    return null as T
-  }
+    // If the backend returns a 401, log it but don't force redirect in dev mode
+    if (response.status === 401) {
+      console.warn('[API] 401 Unauthorized — check backend AUTH_BYPASS setting')
+    }
 
-  return response.json() as Promise<T>
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({
+        detail: response.statusText,
+      }))
+      throw new Error(errorData.detail || 'An API error occurred.')
+    }
+
+    // Handle responses with no content
+    if (response.status === 204) {
+      return null as T
+    }
+
+    return response.json() as Promise<T>
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timed out. The AI is taking longer than expected — please try again.')
+    }
+    throw err
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
 }
 
 /**
@@ -57,7 +82,7 @@ export const apiClient = {
   /**
    * Perform a POST request.
    */
-  post: <T = unknown>(endpoint: string, data?: unknown, options?: RequestInit): Promise<T> => {
+  post: <T = unknown>(endpoint: string, data?: unknown, options?: RequestInit, timeoutMs?: number): Promise<T> => {
     return apiClientFetch<T>(endpoint, {
       ...options,
       method: 'POST',
@@ -66,7 +91,7 @@ export const apiClient = {
         ...options?.headers,
       },
       body: data ? JSON.stringify(data) : undefined,
-    })
+    }, timeoutMs)
   },
 
   /**

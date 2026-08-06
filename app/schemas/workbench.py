@@ -37,3 +37,20 @@ class ReviewRequest(BaseModel):
 
     note: Optional[str] = None   # human reviewer's note
     reviewed_by: Optional[str] = None  # reviewer identifier (email or name)
+
+
+class WorkbenchItemCreate(BaseModel):
+    """Payload to create a new pending approval item in the Workbench queue."""
+
+    ticket_key: str
+    summary: str
+    reporter_name: Optional[str] = None
+    reporter_email: Optional[str] = None
+    vip_user: bool = False
+    organization: Optional[str] = None
+    priority: Optional[str] = "High"
+    diagnosis: Optional[str] = None
+    proposed_action: Optional[str] = None
+    kb_article_id: Optional[str] = None
+    status: Optional[str] = "pending_approval"
+

@@ -76,6 +76,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         r"/ready$",
         r"/api/health$",
         r"/api/ready$",
+        r"/api/docs",
+        r"/api/openapi",
+        r"/api/metrics",
+        r"/api/ai/",
         r"/_next/",
         r"/static/",
         r"/favicon",
@@ -290,9 +294,12 @@ class AuditMiddleware(BaseHTTPMiddleware):
             try:
                 body = await request.body()
                 request_body = self._parse_and_mask_body(body)
-                
-                # We need to reset the body since we consumed it
-                # FastAPI handles this automatically with the Request object
+
+                # Re-wrap request._receive so downstream route handlers can read the body.
+                # IMPORTANT: more_body=False tells ASGI the stream is complete.
+                async def receive() -> dict:
+                    return {"type": "http.request", "body": body, "more_body": False}
+                request._receive = receive  # type: ignore[attr-defined]
             except Exception:
                 request_body = "[BODY READ ERROR]"
 

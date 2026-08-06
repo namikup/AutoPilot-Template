@@ -20,13 +20,57 @@ from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..models.audit import AuditCategory, AuditSeverity
 from ..models.workbench import WorkbenchItem
-from ..schemas.workbench import ReviewRequest, WorkbenchItemOut
+from ..schemas.workbench import ReviewRequest, WorkbenchItemCreate, WorkbenchItemOut
 from ..security import get_current_user
 from ..services.audit import audit
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workbench", tags=["Workbench"])
+
+
+@router.post("/items", response_model=WorkbenchItemOut, status_code=201)
+async def create_workbench_item(
+    body: WorkbenchItemCreate,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Create a new pending approval item in the Workbench queue.
+    """
+    item = WorkbenchItem(
+        ticket_key=body.ticket_key,
+        summary=body.summary,
+        reporter_name=body.reporter_name,
+        reporter_email=body.reporter_email,
+        vip_user=body.vip_user,
+        organization=body.organization,
+        priority=body.priority,
+        diagnosis=body.diagnosis,
+        proposed_action=body.proposed_action,
+        kb_article_id=body.kb_article_id,
+        status=body.status or "pending_approval",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    await audit.log(
+        action="workbench.create",
+        description=f"Workbench item created for review: {item.ticket_key} — {item.summary[:80]}",
+        actor=user,
+        category=AuditCategory.DATA,
+        severity=AuditSeverity.INFO,
+        resource_type="workbench_item",
+        resource_id=str(item.id),
+        resource_name=item.ticket_key,
+        request=request,
+        success=True,
+    )
+
+    log.info(f"✨ Created Workbench item {item.ticket_key} (ID: {item.id})")
+    return item
 
 
 @router.get("/pending", response_model=List[WorkbenchItemOut])
