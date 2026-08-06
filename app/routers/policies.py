@@ -25,6 +25,8 @@ from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..models.audit import AuditCategory, AuditSeverity
 from ..models.policy import Policy, PolicyEvaluation
+from ..models.workbench import WorkbenchItem
+from ..models.hackathon import Issue
 from ..schemas.policy import (
     PolicyEvaluateRequest,
     PolicyEvaluateResponse,
@@ -71,6 +73,8 @@ async def evaluate_policies(
     - DENY short-circuits: evaluation stops at the first DENY.
     - ESCALATE does not short-circuit: evaluation continues so the
       Workbench item carries every reason a human should see.
+    - Automatically creates a WorkbenchItem if final_verdict is ESCALATE or DENY and
+      payload.auto_route_workbench is True.
     """
     req = payload.model_dump()
 
@@ -119,6 +123,38 @@ async def evaluate_policies(
     if final_verdict == "ESCALATE":
         final_reason = " | ".join(escalate_reasons)
 
+    wb_item_id: Optional[str] = None
+    if payload.auto_route_workbench and final_verdict in ["ESCALATE", "DENY"]:
+        existing_item = (
+            db.query(WorkbenchItem)
+            .filter(
+                WorkbenchItem.ticket_key == payload.issue_key,
+                WorkbenchItem.status == "pending_approval",
+            )
+            .first()
+        )
+        if existing_item:
+            wb_item_id = str(existing_item.id)
+        else:
+            issue_obj = db.query(Issue).filter(Issue.issue_key == payload.issue_key).first()
+            new_item = WorkbenchItem(
+                ticket_key=payload.issue_key,
+                summary=issue_obj.summary if issue_obj else f"Policy Exception: {payload.issue_key}",
+                reporter_name=issue_obj.reporter if issue_obj else (payload.reporter or "System"),
+                reporter_email=payload.reporter or "user@example.com",
+                vip_user=payload.is_vip or (issue_obj.reporter in ["Faizal Das", "Tariq Lim", "Aisha Lim"] if issue_obj else False),
+                organization=issue_obj.organizations if issue_obj else None,
+                priority=payload.priority or (issue_obj.priority if issue_obj else "High"),
+                diagnosis=f"Policy Escalation: {final_reason}",
+                proposed_action=f"Human Approval Required — Policy Verdict: {final_verdict}",
+                kb_article_id=payload.kb_article,
+                status="pending_approval",
+            )
+            db.add(new_item)
+            db.flush()
+            wb_item_id = str(new_item.id)
+            log.info(f"🚨 Auto-created WorkbenchItem ID {wb_item_id} for {payload.issue_key} due to {final_verdict}")
+
     db.commit()
     for evaluation in saved_evaluations:
         db.refresh(evaluation)
@@ -140,6 +176,7 @@ async def evaluate_policies(
             "run_id": payload.run_id,
             "verdict": final_verdict,
             "policies_evaluated": [e.policy_id for e in saved_evaluations],
+            "workbench_item_id": wb_item_id,
         },
         request=request,
         success=True,
@@ -155,6 +192,7 @@ async def evaluate_policies(
         verdict=final_verdict,
         reason=final_reason,
         evaluations=[PolicyEvaluationOut.model_validate(e) for e in saved_evaluations],
+        workbench_item_id=wb_item_id,
     )
 
 

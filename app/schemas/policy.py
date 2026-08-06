@@ -84,6 +84,7 @@ class PolicyEvaluateRequest(BaseModel):
     component: Optional[str] = None
     x_channel: Optional[str] = None
     reporter: Optional[str] = None
+    auto_route_workbench: bool = True
 
 
 class PolicyEvaluateResponse(BaseModel):
@@ -92,3 +93,5 @@ class PolicyEvaluateResponse(BaseModel):
     verdict: str = Field(..., description="ALLOW | ESCALATE | DENY")
     reason: str
     evaluations: list[PolicyEvaluationOut]
+    workbench_item_id: Optional[str] = None
+

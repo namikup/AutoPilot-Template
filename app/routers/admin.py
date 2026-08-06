@@ -57,6 +57,7 @@ def _get_keycloak_admin():
     Raises 501 if Keycloak admin service is not available.
     """
     try:
+        # pyrefly: ignore [missing-import]
         from ..services.keycloak_admin import keycloak_admin
         return keycloak_admin
     except ImportError:
