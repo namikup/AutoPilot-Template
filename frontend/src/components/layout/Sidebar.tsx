@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useState } from 'react'
+import React, { createContext, useContext, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -162,8 +162,37 @@ function NavLink({
 function SidebarUser({ isCollapsed }: { isCollapsed: boolean }) {
   const { data: session } = useSession()
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  const [userName, setUserName] = useState<string>('Dev User')
+  const [userEmail, setUserEmail] = useState<string>('dev@autopilot.local')
 
-  if (!session?.user) return null
+  useEffect(() => {
+    const loadUserProfile = () => {
+      try {
+        const saved = localStorage.getItem('autopilot_profile')
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (parsed.name) setUserName(parsed.name)
+          if (parsed.email) setUserEmail(parsed.email)
+        } else if (session?.user) {
+          if (session.user.name) setUserName(session.user.name)
+          if (session.user.email) setUserEmail(session.user.email)
+        }
+      } catch {}
+    }
+
+    loadUserProfile()
+
+    const handleProfileUpdate = () => {
+      loadUserProfile()
+    }
+
+    window.addEventListener('profile_updated', handleProfileUpdate)
+    window.addEventListener('storage', handleProfileUpdate)
+    return () => {
+      window.removeEventListener('profile_updated', handleProfileUpdate)
+      window.removeEventListener('storage', handleProfileUpdate)
+    }
+  }, [session])
 
   return (
     <div
@@ -174,8 +203,8 @@ function SidebarUser({ isCollapsed }: { isCollapsed: boolean }) {
       )}
     >
       <Avatar
-        src={session.user.image}
-        fallback={session.user.name || session.user.email || '?'}
+        src={session?.user?.image}
+        fallback={userName}
         size='sm'
         showStatus
         status='online'
@@ -183,11 +212,11 @@ function SidebarUser({ isCollapsed }: { isCollapsed: boolean }) {
 
       {!isCollapsed && (
         <div className='min-w-0 flex-1'>
-          <p className='truncate text-sm font-medium text-brand-navy'>
-            {session.user.name}
+          <p className='truncate text-sm font-semibold text-brand-navy'>
+            {userName}
           </p>
           <p className='truncate text-xs text-brand-muted'>
-            {session.user.email}
+            {userEmail}
           </p>
         </div>
       )}

@@ -1,7 +1,9 @@
 'use client'
 
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
+import Link from 'next/link'
+import { useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Avatar } from '@/components/ui/avatar'
@@ -48,9 +50,17 @@ function SearchInput({
 }: {
   onOpenCommandPalette?: () => void
 }) {
+  const handleClick = () => {
+    if (onOpenCommandPalette) {
+      onOpenCommandPalette()
+    } else {
+      window.dispatchEvent(new Event('open_command_palette'))
+    }
+  }
+
   return (
     <button
-      onClick={onOpenCommandPalette}
+      onClick={handleClick}
       className={cn(
         'group flex h-9 w-64 items-center gap-2 px-3',
         'rounded-full border border-border/50 bg-white/50',
@@ -131,7 +141,41 @@ function AIManagerTrigger() {
 
 // User menu with dropdown
 function UserMenu() {
-  const user = { name: 'Dev User', email: 'dev@autopilot.local' }
+  const { data: session } = useSession()
+  const [userName, setUserName] = useState<string>('Dev User')
+  const [userEmail, setUserEmail] = useState<string>('dev@autopilot.local')
+  const [isPopped, setIsPopped] = useState(false)
+
+  useEffect(() => {
+    const loadUserProfile = () => {
+      try {
+        const saved = localStorage.getItem('autopilot_profile')
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (parsed.name) setUserName(parsed.name)
+          if (parsed.email) setUserEmail(parsed.email)
+        } else if (session?.user) {
+          if (session.user.name) setUserName(session.user.name)
+          if (session.user.email) setUserEmail(session.user.email)
+        }
+      } catch {}
+    }
+
+    loadUserProfile()
+
+    const handleProfileUpdate = () => {
+      loadUserProfile()
+      setIsPopped(true)
+      setTimeout(() => setIsPopped(false), 2000)
+    }
+
+    window.addEventListener('profile_updated', handleProfileUpdate)
+    window.addEventListener('storage', handleProfileUpdate)
+    return () => {
+      window.removeEventListener('profile_updated', handleProfileUpdate)
+      window.removeEventListener('storage', handleProfileUpdate)
+    }
+  }, [session])
 
   return (
     <DropdownMenu>
@@ -140,20 +184,21 @@ function UserMenu() {
           className={cn(
             'group flex items-center gap-1 rounded-full',
             'focus:outline-none focus:ring-2 focus:ring-brand-cornflower/50 focus:ring-offset-2',
-            'transition-transform duration-200'
+            'transition-all duration-300 ease-out',
+            isPopped && 'ring-4 ring-brand-cornflower/40 scale-105 bg-brand-cornflower/10 p-1'
           )}
         >
           <div className='flex items-center gap-3'>
             <div className='hidden flex-col text-right lg:flex'>
-              <span className='text-sm font-medium text-foreground'>
-                {user.name}
+              <span className='text-sm font-semibold text-foreground'>
+                {userName}
               </span>
               <span className='text-xs text-muted-foreground'>
-                {user.email}
+                {userEmail}
               </span>
             </div>
             <Avatar
-              fallback={user.name}
+              fallback={userName}
               size='md'
               showRing
             />
@@ -171,29 +216,33 @@ function UserMenu() {
         <div className='border-b border-border/50 px-3 py-3'>
           <div className='flex items-center gap-3'>
             <Avatar
-              fallback={user.name}
+              fallback={userName}
               size='md'
             />
             <div className='min-w-0 flex-1'>
-              <p className='truncate text-sm font-medium text-foreground'>
-                {user.name}
+              <p className='truncate text-sm font-semibold text-foreground'>
+                {userName}
               </p>
               <p className='truncate text-xs text-muted-foreground'>
-                {user.email}
+                {userEmail}
               </p>
             </div>
           </div>
         </div>
 
         <div className='py-1'>
-          <DropdownMenuItem className='gap-3 rounded-lg px-3 py-2.5'>
-            <Icons.user className='h-4 w-4 text-muted-foreground' strokeWidth={1.5} />
-            <span>Profile</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem className='gap-3 rounded-lg px-3 py-2.5'>
-            <Icons.settings className='h-4 w-4 text-muted-foreground' strokeWidth={1.5} />
-            <span>Settings</span>
-          </DropdownMenuItem>
+          <Link href='/settings'>
+            <DropdownMenuItem className='gap-3 rounded-lg px-3 py-2.5 cursor-pointer'>
+              <Icons.user className='h-4 w-4 text-muted-foreground' strokeWidth={1.5} />
+              <span>Profile</span>
+            </DropdownMenuItem>
+          </Link>
+          <Link href='/settings'>
+            <DropdownMenuItem className='gap-3 rounded-lg px-3 py-2.5 cursor-pointer'>
+              <Icons.settings className='h-4 w-4 text-muted-foreground' strokeWidth={1.5} />
+              <span>Settings</span>
+            </DropdownMenuItem>
+          </Link>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -238,10 +287,12 @@ export function Header({ onOpenMobileMenu }: HeaderProps) {
           <Icons.menu className='h-5 w-5' strokeWidth={1.5} />
         </Button>
 
-        <Icons.home
-          className='hidden h-4 w-4 text-muted-foreground md:block'
-          strokeWidth={1.5}
-        />
+        <Link href='/' title='Back to Dashboard'>
+          <Icons.home
+            className='hidden h-4 w-4 text-muted-foreground transition-colors hover:text-brand-navy md:block cursor-pointer'
+            strokeWidth={1.5}
+          />
+        </Link>
         <nav
           aria-label='Breadcrumb'
           className='hidden items-center gap-1 text-sm sm:flex'
@@ -254,18 +305,21 @@ export function Header({ onOpenMobileMenu }: HeaderProps) {
                   aria-hidden='true'
                 />
               )}
-              <span
-                className={cn(
-                  index === breadcrumbs.length - 1
-                    ? 'font-medium text-foreground'
-                    : 'cursor-pointer text-muted-foreground hover:text-foreground'
-                )}
-                aria-current={
-                  index === breadcrumbs.length - 1 ? 'page' : undefined
-                }
-              >
-                {crumb.label}
-              </span>
+              {index === breadcrumbs.length - 1 ? (
+                <span
+                  className='font-semibold text-foreground'
+                  aria-current='page'
+                >
+                  {crumb.label}
+                </span>
+              ) : (
+                <Link
+                  href={crumb.href}
+                  className='font-medium text-muted-foreground transition-colors hover:text-brand-navy'
+                >
+                  {crumb.label}
+                </Link>
+              )}
             </React.Fragment>
           ))}
         </nav>

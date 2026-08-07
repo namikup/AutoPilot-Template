@@ -193,9 +193,23 @@ function HeroSection({ userName }: { userName?: string }) {
   )
 }
 
+interface HealthSystem {
+  key: string
+  name: string
+  latency_ms: number
+  details?: string
+  status?: string
+}
+
+interface HealthData {
+  connected_count?: number
+  total_systems?: number
+  systems?: HealthSystem[]
+}
+
 // Live Connected Systems & Diagnostics Card
 function DiagnosticsCard() {
-  const [healthData, setHealthData] = useState<any>(null)
+  const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [apiResponse, setApiResponse] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
 
@@ -203,7 +217,7 @@ function DiagnosticsCard() {
     async function loadHealth() {
       try {
         const data = await apiClient.get('/api/health')
-        setHealthData(data)
+        setHealthData(data as HealthData)
       } catch (err) {
         console.warn('Failed to load health status:', err)
       }
@@ -254,7 +268,7 @@ function DiagnosticsCard() {
         {/* Live Systems Grid */}
         <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
           {healthData?.systems ? (
-            healthData.systems.map((sys: any) => (
+            healthData.systems.map((sys: HealthSystem) => (
               <div
                 key={sys.key}
                 className='flex flex-col justify-between rounded-xl border border-border/60 bg-white/60 p-3.5 shadow-sm transition-all hover:border-brand-cornflower/30 hover:shadow-md'

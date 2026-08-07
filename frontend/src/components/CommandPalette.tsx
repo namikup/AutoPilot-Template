@@ -123,7 +123,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const controlledOpen = open !== undefined ? open : isOpen
   const setControlledOpen = onOpenChange || setIsOpen
 
-  // Keyboard shortcut handler
+  // Keyboard & event shortcut handler
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
       // Cmd+K or Ctrl+K to toggle
@@ -133,8 +133,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       }
     }
 
+    const handleOpenCustom = () => {
+      setControlledOpen(true)
+    }
+
     document.addEventListener('keydown', down)
-    return () => document.removeEventListener('keydown', down)
+    window.addEventListener('open_command_palette', handleOpenCustom)
+    return () => {
+      document.removeEventListener('keydown', down)
+      window.removeEventListener('open_command_palette', handleOpenCustom)
+    }
   }, [controlledOpen, setControlledOpen])
 
   // Focus input when opened and clear search when closed
