@@ -41,3 +41,52 @@ class InsightActionResponse(BaseModel):
     insight: InsightOut
     action_type: Optional[str] = None
     result: dict[str, Any] = {}
+
+
+# ---------------------------------------------------------------------------
+# Module 3: Verify Resolution
+# ---------------------------------------------------------------------------
+
+class VerifyResolutionRequest(BaseModel):
+    """Request body for POST /insights/verify-resolution."""
+    issue_key: str
+
+
+class VerifyResolutionResponse(BaseModel):
+    """Response for POST /insights/verify-resolution."""
+    status: str                               # VERIFIED | ROLLBACK_EXECUTED
+    issue_key: str
+    probe_detail: str
+    rollback_summary: Optional[str] = None
+    workbench_item_id: Optional[int] = None
+    policy_evaluation_id: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Module 4: KB Authoring
+# ---------------------------------------------------------------------------
+
+class KBDraftRequest(BaseModel):
+    """Request body for POST /insights/kb/draft."""
+    issue_key: str
+
+
+class KBDraftResponse(BaseModel):
+    """Response for POST /insights/kb/draft."""
+    status: str                  # DRAFTED | ALREADY_COVERED | NOT_RESOLVED | NOT_FOUND
+    issue_key: str
+    article_id: Optional[str] = None
+    title: Optional[str] = None
+    root_cause: Optional[str] = None
+    workaround: Optional[str] = None
+    x_auto_safe: Optional[bool] = None
+    message: str
+
+
+class KBApproveRequest(BaseModel):
+    """Request body for POST /insights/kb/approve — commits a drafted article."""
+    article_id: str
+    title: Optional[str] = None
+    root_cause: Optional[str] = None
+    workaround: Optional[str] = None
+    x_auto_safe: Optional[bool] = True

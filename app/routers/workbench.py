@@ -10,6 +10,7 @@ Endpoints:
   POST /workbench/{id}/reject    → reject an item, write audit log
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import List
@@ -70,6 +71,51 @@ async def create_workbench_item(
     )
 
     log.info(f"✨ Created Workbench item {item.ticket_key} (ID: {item.id})")
+    return item
+
+
+@router.post("/webhook", response_model=WorkbenchItemOut, status_code=201)
+@router.post("/supervity-webhook", response_model=WorkbenchItemOut, status_code=201)
+async def supervity_webhook_item(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Webhook endpoint for Supervity Auto orchestrator runs to directly push
+    tasks requiring human operator review into the Command Center Workbench queue.
+    """
+    try:
+        body_bytes = await request.body()
+        data = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+    except Exception:
+        data = {}
+
+    ticket_key = data.get("ticket_key") or data.get("issue_key") or data.get("id") or "SUPERVITY-AUTO"
+    summary = data.get("summary") or data.get("title") or data.get("message") or "Supervity Auto Task Exception"
+    reporter_email = data.get("reporter_email") or data.get("email") or "auto@supervity.ai"
+    reporter_name = data.get("reporter_name") or data.get("user") or "Supervity Auto"
+    priority = data.get("priority") or "High"
+    diagnosis = data.get("diagnosis") or data.get("reason") or "Supervity Auto workflow execution requires human review."
+    proposed_action = data.get("proposed_action") or data.get("action") or f"Human Operator Approval for {ticket_key}"
+
+    item = WorkbenchItem(
+        ticket_key=ticket_key,
+        summary=summary,
+        reporter_name=reporter_name,
+        reporter_email=reporter_email,
+        vip_user=bool(data.get("vip_user") or data.get("is_vip", False)),
+        organization=data.get("organization") or "Supervity Auto",
+        priority=priority,
+        diagnosis=diagnosis,
+        proposed_action=proposed_action,
+        kb_article_id=data.get("kb_article_id"),
+        status="pending_approval",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+
+    log.info(f"✨ Supervity Auto Webhook created Workbench item {item.ticket_key} (ID: {item.id})")
     return item
 
 

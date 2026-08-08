@@ -1,6 +1,6 @@
 # app/routers/ai.py
 """
-AI Management Router - Connects frontend AI Manager to the AutoPilot knowledge base.
+AI Management Router - Connects frontend AI Manager to the AutoPilot knowledge base & Supervity Auto.
 
 Strategy:
   1. Try Supervity cloud workflow (fast path, 15s timeout) if SUPERVITY_API_KEY + SUPERVITY_WORKFLOW_ID are set.
@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_
 
 from ..core.database import get_db
 from ..models.hackathon import (
@@ -93,6 +94,124 @@ def parse_supervity_output(raw_text: str) -> str:
     return raw_text
 
 
+def _auto_route_workbench_if_needed(text: str, payload: AIChatRequest, db: Session, user_email: str) -> tuple[str, str | None]:
+    """
+    Detects if the AI output, Supervity inputs, or user prompt requires human review/operator escalation.
+    Triggers for:
+    - VIP reporter (e.g. faizal.das@company.com, Faizal Das, x_vip=True)
+    - High/Highest priority tickets
+    - SLA threshold <= 24 hours
+    - Keywords indicating review, escalation, approval, or human operator needed
+    - Explicit issue_key provided (e.g. ITSM-2013)
+    """
+    # Extract ticket key ONLY from the user's message or payload (do not scan AI output text!)
+    ticket_key = payload.issue_key
+    if not ticket_key or ticket_key == "ISSUE-101":
+        match = re.search(r'\b(ITSM|ISSUE|INC|CHG|REQ|SUP)[-\s]?(\d+)\b', payload.message, re.IGNORECASE)
+        if match:
+            ticket_key = f"{match.group(1).upper()}-{match.group(2)}"
+        elif not ticket_key:
+            ticket_key = "TASK-AUTO"
+
+    issue_obj = db.query(Issue).filter(Issue.issue_key == ticket_key).first() if ticket_key != "TASK-AUTO" else None
+
+    # Check reporter & VIP status from UserDirectory
+    user_db = None
+    if issue_obj and issue_obj.reporter:
+        user_db = db.query(UserDirectory).filter(UserDirectory.display_name.ilike(f"%{issue_obj.reporter}%")).first()
+    if not user_db and payload.reporter_email:
+        user_db = db.query(UserDirectory).filter(UserDirectory.email_address.ilike(f"%{payload.reporter_email}%")).first()
+
+    rep_email = user_db.email_address if user_db else (payload.reporter_email or (issue_obj.reporter_email if issue_obj and hasattr(issue_obj, 'reporter_email') else user_email))
+    rep_name = user_db.display_name if user_db else (issue_obj.reporter if issue_obj else (rep_email.split('@')[0].replace('.', ' ').title()))
+    is_vip = getattr(user_db, 'x_vip', False) if user_db else (rep_name in ["Faizal Das", "Tariq Lim", "Aisha Lim", "Faizal Chen", "Faizal Iyer"] or "faizal.das" in rep_email)
+
+    user_msg_lower = payload.message.lower()
+    has_keywords = any(k in user_msg_lower for k in [
+        "human operator", "escalat", "human review", "pending approval",
+        "hitl", "override", "pause", "require human", "requires human", "exception"
+    ])
+
+    # Only trigger Workbench item creation if an EXPLICIT real ticket is involved,
+    # or if explicit VIP / escalation / review keywords are present in the request.
+    is_real_ticket = (issue_obj is not None) or (ticket_key not in ["ISSUE-101", "TASK-AUTO"] and ticket_key.startswith(("ITSM-", "INC-", "CHG-", "REQ-")))
+    
+    is_high_priority = (issue_obj.priority in ["High", "Highest"]) if issue_obj else False
+    is_tight_sla = (payload.sla_threshold_hours is not None and payload.sla_threshold_hours <= 24 and is_real_ticket)
+
+    # Informational KB queries / Q&A without a real ticket should NOT create dummy workbench items
+    if ticket_key in ["ISSUE-101", "TASK-AUTO"] and not has_keywords:
+        return text, None
+
+    needs_review = (is_vip and is_real_ticket) or has_keywords or (is_real_ticket and (is_high_priority or is_tight_sla))
+
+    if not needs_review:
+        return text, None
+
+    # Check if existing pending item for this ticket already exists
+    existing = db.query(WorkbenchItem).filter(
+        WorkbenchItem.ticket_key == ticket_key,
+        WorkbenchItem.status == "pending_approval"
+    ).first()
+
+    if existing:
+        notice = f"\n\n📌 **Pending Approval Exists:** Item **#{existing.id}** for `{ticket_key}` is awaiting review in your [Workbench Queue](/workbench)."
+        return text + notice, str(existing.id)
+
+    # Determine real SLA status from ticket
+    sla_desc = "SLA status unknown"
+    if issue_obj:
+        if issue_obj.time_to_resolution:
+            sla_desc = f"SLA Status: {issue_obj.time_to_resolution}"
+        elif payload.sla_threshold_hours is not None:
+            sla_desc = f"SLA Remaining: {payload.sla_threshold_hours}h"
+        elif issue_obj.due_date:
+            sla_desc = f"SLA Due: {issue_obj.due_date}"
+
+    # Determine real policy evaluation reason
+    reasons = []
+    if is_vip:
+        reasons.append(f"VIP Reporter ({rep_name})")
+    if is_high_priority:
+        reasons.append(f"{issue_obj.priority} Priority")
+    if has_keywords:
+        reasons.append("Operator Escalation Requested")
+    if not reasons:
+        reasons.append("Policy Gate Compliance Required")
+
+    escalation_reason = " & ".join(reasons)
+    vip_tag = " (VIP)" if is_vip else ""
+    
+    summary_text = issue_obj.summary if issue_obj else (payload.message if len(payload.message) > 10 else f"Supervity Auto Task: {ticket_key}")
+    org_text = issue_obj.organizations if issue_obj else "Finance"
+    priority_text = issue_obj.priority if issue_obj else "High"
+    slack_channel = payload.it_team_slack or "#gang-intelligence"
+
+    diag_text = f"Policy Evaluation Escalation: {escalation_reason} | {sla_desc}. Requires human signoff before execution."
+    prop_action = f"Review & authorize resolution action for {ticket_key} via {slack_channel}."
+
+    new_item = WorkbenchItem(
+        ticket_key=ticket_key,
+        summary=summary_text,
+        reporter_name=rep_name,
+        reporter_email=rep_email,
+        vip_user=is_vip,
+        organization=org_text,
+        priority=priority_text,
+        diagnosis=diag_text,
+        proposed_action=prop_action,
+        status="pending_approval"
+    )
+    db.add(new_item)
+    db.commit()
+    db.refresh(new_item)
+
+    log.info(f"🚨 Auto-routed Supervity task to Workbench ID {new_item.id} for ticket {ticket_key}")
+    vip_str = " (VIP)" if is_vip else ""
+    notice = f"\n\n📌 **Human Operator Review Required:** Item **#{new_item.id}** for `{ticket_key}` (Reporter: {rep_name}{vip_str}, Priority: {priority_text}, {sla_desc}) has been auto-routed to your [Workbench Queue](/workbench)."
+    return text + notice, str(new_item.id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Local fallback intelligence — queries the hackathon DB directly
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,10 +223,9 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
     Uses correct field names from the SQLAlchemy models.
     """
     msg_lower = message.lower()
-    from sqlalchemy import or_, and_
 
     # ── Ticket lookup by explicit ID (e.g. ITSM-2008) ────────────────────────
-    ticket_match = re.search(r'\b(ITSM|ISSUE|INC|CHG|REQ)[-\s]?(\d+)\b', message, re.IGNORECASE)
+    ticket_match = re.search(r'\b(ITSM|ISSUE|INC|CHG|REQ|SUP)[-\s]?(\d+)\b', message, re.IGNORECASE)
     if ticket_match:
         ticket_key = f"{ticket_match.group(1).upper()}-{ticket_match.group(2)}"
         issue = db.query(Issue).filter(Issue.issue_key == ticket_key).first()
@@ -119,34 +237,37 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
                 f"- **Reporter:** {issue.reporter or 'Unknown'}\n"
                 f"- **Type:** {issue.issue_type or 'N/A'}\n"
                 f"- **Created:** {issue.created or 'N/A'}\n"
-                f"- **Description:** {(issue.description or '')[:200]}..."
+                f"- **Description:** {issue.description or 'No description provided.'}"
             )
-        return f"No ticket found with ID **{ticket_key}**."
+        return f"❓ Ticket **{ticket_key}** was not found in the dataset."
 
-    # ── Reporter / User specific tickets (e.g. "tickets for Chloe Fernandez") ──
-    reporter_match = re.search(r'(?:tickets?\s+(?:for|reported\s+by|by|of)|issues?\s+for)\s+([a-zA-Z\s]+)', msg_lower)
-    if reporter_match:
-        name_query = reporter_match.group(1).strip()
-        user_issues = (
-            db.query(Issue)
-            .filter(Issue.reporter.ilike(f"%{name_query}%"))
-            .order_by(Issue.ingested_at.desc())
-            .limit(5)
-            .all()
-        )
-        if user_issues:
-            lines = [f"👤 **{len(user_issues)} tickets for '{name_query.title()}':**\n"]
-            for t in user_issues:
-                lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.status}*")
-            return "\n".join(lines)
-        return f"No tickets found for reporter **{name_query.title()}**."
+    # ── User ticket query (e.g. "tickets for Chloe Fernandez") ──────────────
+    if any(k in msg_lower for k in ["tickets for", "issues for", "reported by", "user tickets"]):
+        words = message.replace("?", "").split()
+        possible_names = []
+        for i in range(len(words) - 1):
+            pair = f"{words[i]} {words[i+1]}".strip(",. ")
+            if len(pair) > 4 and pair.lower() not in ["show me", "tickets for", "issues for", "list all"]:
+                possible_names.append(pair)
 
-    # ── Priority filtered tickets (e.g. "high priority open tickets") ──────────
-    if any(p in msg_lower for p in ["high priority", "highest priority", "urgent", "critical", "low priority", "medium priority"]):
-        priorities = []
-        if any(p in msg_lower for p in ["high", "highest", "urgent", "critical"]):
-            priorities = ["High", "Highest"]
-        elif "medium" in msg_lower:
+        for name in possible_names:
+            user_issues = (
+                db.query(Issue)
+                .filter(Issue.reporter.ilike(f"%{name}%"))
+                .order_by(Issue.ingested_at.desc())
+                .limit(5)
+                .all()
+            )
+            if user_issues:
+                lines = [f"👤 **{len(user_issues)} tickets reported by {name}:**\n"]
+                for t in user_issues:
+                    lines.append(f"- **{t.issue_key}** [{t.priority}] {t.summary} — *{t.status}*")
+                return "\n".join(lines)
+
+    # ── Priority-specific queries ────────────────────────────────────────────
+    if any(k in msg_lower for k in ["high priority", "highest priority", "urgent", "critical"]):
+        priorities = ["Highest", "High"]
+        if "medium" in msg_lower:
             priorities = ["Medium"]
         elif "low" in msg_lower:
             priorities = ["Low"]
@@ -166,7 +287,7 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
             return "\n".join(lines)
         return f"✅ No open tickets found matching priority **{'/'.join(priorities)}**."
 
-    # ── Status-specific ticket queries (e.g. "tickets in progress", "resolved tickets") ──
+    # ── Status-specific ticket queries ──────────────────────────────────────
     if "in progress" in msg_lower or "in-progress" in msg_lower:
         ip_issues = (
             db.query(Issue)
@@ -288,25 +409,39 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
 
     # ── Knowledge base search ─────────────────────────────────────────────────
     if any(k in msg_lower for k in ["knowledge", "kb", "article", "articles", "how to", "guide",
-                                     "solution", "fix", "resolve", "workaround"]):
-        # Extract clean words using regex
+                                     "solution", "fix", "resolve", "workaround", "slow", "wifi", "network", "password", "printer", "drive", "email", "guest"]):
         raw_words = re.findall(r'\b[a-zA-Z0-9]+\b', msg_lower)
         stopwords = {
             "help", "with", "that", "this", "know", "find", "articles", "article",
             "show", "tell", "about", "how", "to", "fix", "resolve", "search", "list",
-            "what", "is", "the", "for", "and", "can", "you", "me", "base", "knowledge", "kb"
+            "what", "is", "the", "for", "and", "can", "you", "me", "base", "knowledge", "kb", "issue", "problem"
         }
         keywords = [w for w in raw_words if len(w) >= 2 and w not in stopwords]
 
         if keywords:
-            conditions = []
-            for kw in keywords[:3]:
-                conditions += [
-                    KnowledgeBase.title.ilike(f"%{kw}%"),
-                    KnowledgeBase.root_cause.ilike(f"%{kw}%"),
-                    KnowledgeBase.workaround.ilike(f"%{kw}%"),
-                ]
-            articles = db.query(KnowledgeBase).filter(or_(*conditions)).limit(5).all()
+            # Score articles by relevance (title matches scored higher than body matches)
+            all_kb = db.query(KnowledgeBase).all()
+            scored: list[tuple[int, KnowledgeBase]] = []
+            for a in all_kb:
+                score = 0
+                title_lower = (a.title or "").lower()
+                rc_lower = (a.root_cause or "").lower()
+                wa_lower = (a.workaround or "").lower()
+
+                for kw in keywords:
+                    if kw in title_lower:
+                        score += 5
+                    if kw in rc_lower:
+                        score += 2
+                    if kw in wa_lower:
+                        score += 2
+
+                if score > 0:
+                    scored.append((score, a))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            articles = [a for _, a in scored[:5]]
+
             if articles:
                 lines = [f"📚 **Found {len(articles)} knowledge base article(s):**\n"]
                 for a in articles:
@@ -315,7 +450,6 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
                         lines.append(f"  _Workaround: {a.workaround[:150]}..._")
                 return "\n".join(lines)
 
-        # General KB list or fallback when specific topic not found
         all_articles = db.query(KnowledgeBase).limit(5).all()
         if all_articles:
             prefix = "📚 **Knowledge Base Articles:**\n" if not keywords else f"No specific KB article matched **'{' '.join(keywords)}'**. Here are available guides:\n"
@@ -372,6 +506,7 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
         "- 📋 **View open/pending tickets** — *\"Show me open tickets\"*\n"
         "- 🔥 **Priority tickets** — *\"High priority open tickets\"*\n"
         "- 👤 **User tickets** — *\"Tickets for Chloe Fernandez\"*\n"
+        "- 🚀 **Run Supervity Auto Workflow** — *\"Run workflow for ITSM-2013\"*\n"
         "- 🚨 **SLA alerts** — *\"Any SLA breaches?\"*\n"
         "- 👑 **VIP issues** — *\"Show VIP user tickets\"*\n"
         "- 🎫 **Ticket lookup** — *\"Tell me about ITSM-2013\"*\n"
@@ -390,15 +525,11 @@ def _local_ai_response(message: str, db: Session, user_email: str) -> str:
 @router.post("/chat", response_model=AIChatResponse)
 async def ai_chat(
     payload: AIChatRequest,
-    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """
-    AI Manager chat endpoint.
-
-    Flow:
-      1. Try Supervity cloud workflow (15s timeout) if API key + workflow ID are set.
-      2. On timeout/error OR if keys not configured → instant local DB-powered response.
+    Primary AI chat & Supervity Auto workflow execution route.
     """
     api_url = _env(
         "SUPERVITY_API_URL",
@@ -412,12 +543,20 @@ async def ai_chat(
     user_timezone = _env("SUPERVITY_USER_TIMEZONE", "Asia/Kuala_Lumpur")
 
     user_email = current_user.get("email") or payload.reporter_email or "user@example.com"
+
+    # Explicit workflow trigger intent check
+    msg_lower = payload.message.lower()
+    is_explicit_workflow_trigger = any(k in msg_lower for k in [
+        "run workflow", "trigger workflow", "execute workflow", "start workflow",
+        "run orchestrator", "trigger orchestrator", "execute orchestrator", "run supervity"
+    ])
+
     skip_supervity = not api_key or not workflow_id
 
-    log.info(f"AI chat: user={user_email}, supervity_skip={skip_supervity}, msg='{payload.message[:60]}'")
+    log.info(f"AI chat: user={user_email}, explicit_trigger={is_explicit_workflow_trigger}, msg='{payload.message[:60]}'")
 
-    # ── Supervity fast path (only if both API key and workflow ID are configured) ─
-    if not skip_supervity:
+    # ── Supervity execution path ───────────────────────────────────────────────
+    if not skip_supervity and (is_explicit_workflow_trigger or not payload.message):
         headers = {
             "Authorization": f"Bearer {api_key}",
             "x-source": "external",
@@ -434,14 +573,13 @@ async def ai_chat(
             "workflowId": (None, workflow_id),
             "inputs[issue_key]": (None, payload.issue_key or ""),
             "inputs[ticket_description]": (None, payload.message),
-            "inputs[reporter_email]": (None, user_email),
+            "inputs[reporter_email]": (None, payload.reporter_email or user_email),
             "inputs[inactive_days_threshold]": (None, str(payload.inactive_days_threshold)),
             "inputs[sla_threshold_hours]": (None, str(payload.sla_threshold_hours)),
             "inputs[it_team_slack]": (None, payload.it_team_slack or "#it-support"),
         }
 
         try:
-            # Enforce strict 5.0s wall-clock timeout so streaming pings do not reset read timeout
             import asyncio
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
                 response = await asyncio.wait_for(
@@ -452,8 +590,9 @@ async def ai_chat(
                     ai_message = parse_supervity_output(response.text)
                     if ai_message and "empty" not in ai_message.lower():
                         log.info("Supervity responded successfully.")
+                        final_msg, _ = _auto_route_workbench_if_needed(ai_message, payload, db, user_email)
                         return AIChatResponse(
-                            response=ai_message,
+                            response=final_msg,
                             status="success",
                             workflow_id=workflow_id,
                         )
@@ -466,9 +605,10 @@ async def ai_chat(
 
     # ── Local fallback — always instant ──────────────────────────────────────
     local_response = _local_ai_response(payload.message, db, user_email)
+    final_msg, _ = _auto_route_workbench_if_needed(local_response, payload, db, user_email)
     log.info("Returning local AI response.")
     return AIChatResponse(
-        response=local_response,
+        response=final_msg,
         status="success",
         workflow_id=workflow_id or "local",
     )
@@ -495,4 +635,3 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "total_tickets": total_tickets,
         "pending_workbench": pending_wb,
     }
-
